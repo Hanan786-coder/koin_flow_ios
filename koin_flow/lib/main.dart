@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -27,11 +28,18 @@ class Expense {
 }
 
 class MoneyEntry {
-  MoneyEntry({required this.name, required this.amount, required this.note, required this.isOwedToMe});
+  MoneyEntry({required this.id, required this.name, required this.amount, required this.note, required this.isOwedToMe, required this.dueDate, this.settled = false});
+  final String id;
   final String name;
   final double amount;
   final String note;
   final bool isOwedToMe;
+  final DateTime dueDate;
+  final bool settled;
+
+  MoneyEntry copyWith({bool? settled}) => MoneyEntry(id: id, name: name, amount: amount, note: note, isOwedToMe: isOwedToMe, dueDate: dueDate, settled: settled ?? this.settled);
+  Map<String, dynamic> toJson() => {'id': id, 'name': name, 'amount': amount, 'note': note, 'isOwedToMe': isOwedToMe, 'dueDate': dueDate.toIso8601String(), 'settled': settled};
+  factory MoneyEntry.fromJson(Map<String, dynamic> json) => MoneyEntry(id: json['id'] as String, name: json['name'] as String, amount: (json['amount'] as num).toDouble(), note: json['note'] as String, isOwedToMe: json['isOwedToMe'] as bool, dueDate: DateTime.parse(json['dueDate'] as String), settled: json['settled'] as bool? ?? false);
 }
 
 class KoinFlowApp extends StatelessWidget {
@@ -61,9 +69,12 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   int _tab = 0;
-  double _budget = 2400;
+  double _budget = 240000;
   List<Expense> _expenses = [];
-  final List<MoneyEntry> _debts = [MoneyEntry(name: 'Maya Chen', amount: 42.50, note: 'Dinner split', isOwedToMe: false), MoneyEntry(name: 'Jordan Lee', amount: 80, note: 'Concert tickets', isOwedToMe: true)];
+  List<MoneyEntry> _debts = [];
+  String _expenseQuery = '';
+  String _expenseCategory = 'All';
+  bool _privacyLock = false;
 
   @override
   void initState() { super.initState(); _load(); }
@@ -71,7 +82,8 @@ class _HomePageState extends State<HomePage> {
     try {
       final prefs = await SharedPreferences.getInstance();
       final raw = prefs.getStringList('expenses') ?? [];
-      setState(() { _expenses = raw.map((item) => Expense.fromJson(jsonDecode(item) as Map<String, dynamic>)).toList(); _budget = prefs.getDouble('budget') ?? 2400; });
+      final debtRaw = prefs.getStringList('debts') ?? [];
+      setState(() { _expenses = raw.map((item) => Expense.fromJson(jsonDecode(item) as Map<String, dynamic>)).toList(); _debts = debtRaw.map((item) => MoneyEntry.fromJson(jsonDecode(item) as Map<String, dynamic>)).toList(); _budget = prefs.getDouble('budget') ?? 240000; _privacyLock = prefs.getBool('privacyLock') ?? false; });
     } catch (_) {
       return;
     }
@@ -79,17 +91,41 @@ class _HomePageState extends State<HomePage> {
   Future<void> _save() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setStringList('expenses', _expenses.map((item) => jsonEncode(item.toJson())).toList());
+    await prefs.setStringList('debts', _debts.map((item) => jsonEncode(item.toJson())).toList());
     await prefs.setDouble('budget', _budget);
+    await prefs.setBool('privacyLock', _privacyLock);
   }
   double get _spent => _expenses.fold(0, (sum, item) => sum + item.amount);
-  double get _received => _debts.where((item) => item.isOwedToMe).fold(0, (sum, item) => sum + item.amount);
-  double get _owed => _debts.where((item) => !item.isOwedToMe).fold(0, (sum, item) => sum + item.amount);
+  double get _received => _debts.where((item) => item.isOwedToMe && !item.settled).fold(0, (sum, item) => sum + item.amount);
+  double get _owed => _debts.where((item) => !item.isOwedToMe && !item.settled).fold(0, (sum, item) => sum + item.amount);
+  List<Expense> get _filteredExpenses => _expenses.where((item) => (_expenseCategory == 'All' || item.category == _expenseCategory) && (item.title.toLowerCase().contains(_expenseQuery.toLowerCase()) || item.category.toLowerCase().contains(_expenseQuery.toLowerCase()))).toList();
 
   void _addExpense() async {
     final result = await showModalBottomSheet<Expense>(context: context, isScrollControlled: true, backgroundColor: _panel, builder: (_) => const AddExpenseSheet());
     if (result == null) return;
     setState(() => _expenses = [result, ..._expenses]);
     await _save();
+  }
+
+  Future<void> _addDebt() async {
+    final result = await showModalBottomSheet<MoneyEntry>(context: context, isScrollControlled: true, backgroundColor: _panel, builder: (_) => const AddMoneySheet());
+    if (result == null) return;
+    setState(() => _debts = [result, ..._debts]);
+    await _save();
+  }
+
+  Future<void> _settleDebt(MoneyEntry item) async {
+    setState(() => _debts = _debts.map((entry) => entry.id == item.id ? entry.copyWith(settled: true) : entry).toList());
+    await _save();
+  }
+
+  void _showNotifications() {
+    showDialog<void>(context: context, builder: (_) => AlertDialog(title: const Text('Financial check-in'), content: Text(_debts.where((item) => !item.settled).isEmpty ? 'You have ${_debts.where((item) => !item.settled).length} open balance(s) totalling Rs. ${(_received + _owed).toStringAsFixed(0)}.' : 'No open balances. Your ledger is up to date.'), actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Done'))]));
+  }
+
+  void _showExport() {
+    final backup = const JsonEncoder.withIndent('  ').convert({'expenses': _expenses.map((item) => item.toJson()).toList(), 'balances': _debts.map((item) => item.toJson()).toList(), 'monthlyBudget': _budget, 'currency': 'PKR'});
+    showDialog<void>(context: context, builder: (_) => AlertDialog(title: const Text('Ledger backup'), content: SizedBox(width: double.maxFinite, child: SelectableText(backup, maxLines: 12, style: const TextStyle(fontSize: 11))), actions: [TextButton(onPressed: () { Clipboard.setData(ClipboardData(text: backup)); Navigator.pop(context); _showSnack('Backup copied to clipboard.'); }, child: const Text('Copy')), TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close'))]));
   }
 
   @override
@@ -102,9 +138,9 @@ class _HomePageState extends State<HomePage> {
   }
 
   Widget _shell({required String eyebrow, required String title, required Widget child}) => CustomScrollView(slivers: [SliverPadding(padding: const EdgeInsets.fromLTRB(20, 22, 20, 0), sliver: SliverToBoxAdapter(child: _header(eyebrow, title))), SliverPadding(padding: const EdgeInsets.fromLTRB(20, 24, 20, 32), sliver: SliverToBoxAdapter(child: child))]);
-  Widget _header(String eyebrow, String title) => Row(crossAxisAlignment: CrossAxisAlignment.start, children: [const KoinLogo(size: 42), const SizedBox(width: 12), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(eyebrow.toUpperCase(), style: const TextStyle(color: _green, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 1.5)), const SizedBox(height: 4), Text(title, style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w700))])), IconButton(onPressed: () {}, icon: const Icon(Icons.notifications_none_rounded, color: _muted))]);
+  Widget _header(String eyebrow, String title) => Row(crossAxisAlignment: CrossAxisAlignment.start, children: [const KoinLogo(size: 42), const SizedBox(width: 12), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(eyebrow.toUpperCase(), style: const TextStyle(color: _green, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 1.5)), const SizedBox(height: 4), Text(title, style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w700))])), IconButton(onPressed: _showNotifications, tooltip: 'View financial check-in', icon: const Icon(Icons.notifications_none_rounded, color: _muted))]);
 
-  Widget _dashboard() => _shell(eyebrow: 'Thursday, October 3', title: 'Good morning, Alex', child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [_balanceCard(), const SizedBox(height: 22), _sectionTitle('This month', 'October 2026'), const SizedBox(height: 12), Row(children: [_statCard('Spent', 'Rs. ${_spent.toStringAsFixed(0)}', Icons.arrow_upward_rounded, _pink), const SizedBox(width: 12), _statCard('Available', 'Rs. ${(_budget - _spent).toStringAsFixed(0)}', Icons.south_west_rounded, _green)]), const SizedBox(height: 22), _cashflowChart(), const SizedBox(height: 24), _sectionTitle('Recent activity', 'See all', onTap: () => setState(() => _tab = 1)), const SizedBox(height: 10), if (_expenses.isEmpty) _emptyState('Your ledger is ready', 'Add your first expense to start seeing your flow.') else ..._expenses.take(4).map(_expenseTile), const SizedBox(height: 22), _sectionTitle('People & balances', 'Manage', onTap: () => setState(() => _tab = 2)), const SizedBox(height: 12), Row(children: [_miniBalance('You are owed', _received, _green), const SizedBox(width: 12), _miniBalance('You owe', _owed, _pink)])]));
+  Widget _dashboard() => _shell(eyebrow: 'Thursday, October 3', title: 'Good morning, Abdul Hanan', child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [_balanceCard(), const SizedBox(height: 22), _sectionTitle('This month', 'October 2026'), const SizedBox(height: 12), Row(children: [_statCard('Spent', 'Rs. ${_spent.toStringAsFixed(0)}', Icons.arrow_upward_rounded, _pink), const SizedBox(width: 12), _statCard('Available', 'Rs. ${(_budget - _spent).toStringAsFixed(0)}', Icons.south_west_rounded, _green)]), const SizedBox(height: 22), _cashflowChart(), const SizedBox(height: 16), _categoryBreakdown(), const SizedBox(height: 24), _sectionTitle('Recent activity', 'See all', onTap: () => setState(() => _tab = 1)), const SizedBox(height: 10), if (_expenses.isEmpty) _emptyState('Your ledger is ready', 'Add your first expense to start seeing your flow.') else ..._expenses.take(4).map(_expenseTile), const SizedBox(height: 22), _sectionTitle('People & balances', 'Manage', onTap: () => setState(() => _tab = 2)), const SizedBox(height: 12), Row(children: [_miniBalance('You are owed', _received, _green), const SizedBox(width: 12), _miniBalance('You owe', _owed, _pink)])]));
   Widget _balanceCard() => Container(padding: const EdgeInsets.all(20), decoration: BoxDecoration(gradient: const LinearGradient(colors: [Color(0xFF132227), Color(0xFF10171D)], begin: Alignment.topLeft, end: Alignment.bottomRight), borderRadius: BorderRadius.circular(16), border: Border.all(color: _green.withValues(alpha: .2))), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [const Text('NET LIQUIDITY', style: TextStyle(color: _muted, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 1.4)), const SizedBox(height: 8), Text('Rs. ${(_budget - _spent + _received - _owed).toStringAsFixed(2)}', style: const TextStyle(fontSize: 32, fontWeight: FontWeight.w800)), const SizedBox(height: 18), Row(children: [const Icon(Icons.trending_up_rounded, color: _green, size: 18), const SizedBox(width: 6), Text('${_expenses.isEmpty ? '0' : '12.8'}% from last month', style: const TextStyle(color: _green, fontWeight: FontWeight.w600)), const Spacer(), const Text('PKR', style: TextStyle(color: _muted, fontWeight: FontWeight.w700))]) ]));
   Widget _cashflowChart() {
     final today = DateTime.now();
@@ -114,16 +150,47 @@ class _HomePageState extends State<HomePage> {
     });
     return Container(padding: const EdgeInsets.fromLTRB(16, 16, 16, 12), decoration: BoxDecoration(color: _panel, borderRadius: BorderRadius.circular(16), border: Border.all(color: Colors.white.withValues(alpha: .06))), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Row(children: [const Expanded(child: Text('Cashflow this week', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700))), Text('Rs. ${values.fold(0.0, (sum, value) => sum + value).toStringAsFixed(0)}', style: const TextStyle(color: _green, fontWeight: FontWeight.w700))]), const SizedBox(height: 18), SizedBox(height: 130, width: double.infinity, child: CustomPaint(painter: _CashflowPainter(values))), const SizedBox(height: 8), Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: List.generate(7, (index) => Text('${today.day - (6 - index)}', style: const TextStyle(color: _muted, fontSize: 11))))]));
   }
+  Widget _categoryBreakdown() {
+    const categories = ['Food', 'Transport', 'Home', 'Shopping', 'Health', 'Other'];
+    final totals = {for (final category in categories) category: _expenses.where((item) => item.category == category).fold(0.0, (sum, item) => sum + item.amount)};
+    final largest = totals.values.fold(0.0, (max, value) => value > max ? value : max);
+    return Container(padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: _panel, borderRadius: BorderRadius.circular(16), border: Border.all(color: Colors.white.withValues(alpha: .06))), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [const Text('Spending by category', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)), const SizedBox(height: 16), ...categories.map((category) { final amount = totals[category]!; final ratio = largest == 0 ? 0.0 : amount / largest; return Padding(padding: const EdgeInsets.only(bottom: 12), child: Row(children: [SizedBox(width: 76, child: Text(category, style: const TextStyle(color: _muted, fontSize: 12))), Expanded(child: ClipRRect(borderRadius: BorderRadius.circular(4), child: LinearProgressIndicator(value: ratio, minHeight: 8, backgroundColor: _panelHigh, color: category == 'Shopping' ? _gold : _violet))), const SizedBox(width: 12), SizedBox(width: 78, child: Text('Rs. ${amount.toStringAsFixed(0)}', textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700))) ])); })]));
+  }
   Widget _statCard(String label, String value, IconData icon, Color color) => Expanded(child: Container(padding: const EdgeInsets.all(15), decoration: BoxDecoration(color: _panel, borderRadius: BorderRadius.circular(16)), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Icon(icon, color: color, size: 18), const SizedBox(height: 12), Text(label, style: const TextStyle(color: _muted, fontSize: 13)), const SizedBox(height: 4), Text(value, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700))])));
 
-  Widget _expensesPage() => _shell(eyebrow: 'Your ledger', title: 'Daily expenses', child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Container(padding: const EdgeInsets.all(18), decoration: BoxDecoration(color: _panel, borderRadius: BorderRadius.circular(16), border: Border.all(color: Colors.white.withValues(alpha: .06))), child: Row(children: [const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('October spend', style: TextStyle(color: _muted)), SizedBox(height: 5), Text('Track the little things', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600))])), Text('Rs. ${_spent.toStringAsFixed(2)}', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: _violet))])), const SizedBox(height: 24), _sectionTitle('All transactions', 'Add expense', onTap: _addExpense), const SizedBox(height: 12), if (_expenses.isEmpty) _emptyState('No expenses yet', 'Tap Add expense to record a purchase.') else ..._expenses.map(_expenseTile)]));
-  Widget _debtsPage() => _shell(eyebrow: 'Split with ease', title: 'People & balances', child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Row(children: [_miniBalance('To receive', _received, _green), const SizedBox(width: 12), _miniBalance('To pay', _owed, _pink)]), const SizedBox(height: 26), _sectionTitle('Open balances', 'Add person', onTap: () => _showSnack('People can be added from a shared expense.')), const SizedBox(height: 12), ..._debts.map((item) => Container(margin: const EdgeInsets.only(bottom: 10), padding: const EdgeInsets.all(15), decoration: BoxDecoration(color: _panel, borderRadius: BorderRadius.circular(15)), child: Row(children: [CircleAvatar(backgroundColor: (item.isOwedToMe ? _green : _pink).withValues(alpha: .16), child: Text(item.name.substring(0, 1), style: TextStyle(color: item.isOwedToMe ? _green : _pink, fontWeight: FontWeight.w700))), const SizedBox(width: 12), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(item.name, style: const TextStyle(fontWeight: FontWeight.w700)), const SizedBox(height: 3), Text(item.note, style: const TextStyle(color: _muted, fontSize: 13))])), Text('${item.isOwedToMe ? '+' : '-'}\$${item.amount.toStringAsFixed(2)}', style: TextStyle(color: item.isOwedToMe ? _green : _pink, fontWeight: FontWeight.w700))])))]));
-  Widget _settingsPage() => _shell(eyebrow: 'Stay on track', title: 'Budget & settings', child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [_budgetCard(), const SizedBox(height: 24), _sectionTitle('Preferences', 'Stored on this device'), const SizedBox(height: 10), _settingTile(Icons.currency_exchange_rounded, 'Default currency', 'USD — US Dollar'), _settingTile(Icons.lock_outline_rounded, 'Privacy lock', 'Off'), _settingTile(Icons.file_download_outlined, 'Export ledger', 'CSV and JSON'), const SizedBox(height: 18), Center(child: Text('Koin Flow 1.0.0', style: TextStyle(color: _muted.withValues(alpha: .65), fontSize: 12)))]));
-  Widget _budgetCard() => Container(padding: const EdgeInsets.all(19), decoration: BoxDecoration(color: _panel, borderRadius: BorderRadius.circular(18)), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Row(children: [const Expanded(child: Text('Monthly budget', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700))), Text('\$${_budget.toStringAsFixed(0)}', style: const TextStyle(color: _violet, fontSize: 20, fontWeight: FontWeight.w700))]), const SizedBox(height: 18), ClipRRect(borderRadius: BorderRadius.circular(6), child: LinearProgressIndicator(value: (_spent / _budget).clamp(0, 1), minHeight: 9, backgroundColor: _panelHigh, color: _spent > _budget ? _pink : _green)), const SizedBox(height: 10), Text('\$${_spent.toStringAsFixed(0)} spent of \$${_budget.toStringAsFixed(0)}', style: const TextStyle(color: _muted, fontSize: 13)), Slider(value: _budget, min: 500, max: 10000, divisions: 95, onChanged: (value) { setState(() => _budget = value); _save(); })]));
-  Widget _settingTile(IconData icon, String title, String subtitle) => ListTile(contentPadding: const EdgeInsets.symmetric(vertical: 2), leading: Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: _panel, borderRadius: BorderRadius.circular(12)), child: Icon(icon, color: _violet, size: 20)), title: Text(title, style: const TextStyle(fontWeight: FontWeight.w600)), subtitle: Text(subtitle, style: const TextStyle(color: _muted, fontSize: 13)), trailing: const Icon(Icons.chevron_right_rounded, color: _muted));
-  Widget _expenseTile(Expense item) => Dismissible(key: ValueKey('${item.title}-${item.date}'), onDismissed: (_) { setState(() => _expenses.remove(item)); _save(); }, background: Container(color: _pink.withValues(alpha: .15), alignment: Alignment.centerRight, padding: const EdgeInsets.only(right: 20), child: const Icon(Icons.delete_outline, color: _pink)), child: Container(margin: const EdgeInsets.only(bottom: 9), padding: const EdgeInsets.all(13), decoration: BoxDecoration(color: _panel, borderRadius: BorderRadius.circular(15)), child: Row(children: [Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: _violet.withValues(alpha: .12), borderRadius: BorderRadius.circular(12)), child: Icon(_categoryIcon(item.category), color: _violet, size: 20)), const SizedBox(width: 12), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(item.title, style: const TextStyle(fontWeight: FontWeight.w700)), const SizedBox(height: 3), Text('${item.category} · ${_date(item.date)}', style: const TextStyle(color: _muted, fontSize: 12))])), Text('-\$${item.amount.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.w700, color: _pink))])));
+  Widget _expensesPage() => _shell(
+        eyebrow: 'Your ledger',
+        title: 'Daily expenses',
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Container(padding: const EdgeInsets.all(18), decoration: BoxDecoration(color: _panel, borderRadius: BorderRadius.circular(16), border: Border.all(color: Colors.white.withValues(alpha: .06))), child: Row(children: [const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('October spend', style: TextStyle(color: _muted)), SizedBox(height: 5), Text('Track the little things', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600))])), Text('Rs. ${_spent.toStringAsFixed(2)}', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: _violet))])),
+          const SizedBox(height: 16),
+          TextField(onChanged: (value) => setState(() => _expenseQuery = value), decoration: const InputDecoration(prefixIcon: Icon(Icons.search), hintText: 'Search expenses')),
+          const SizedBox(height: 12),
+          SizedBox(height: 38, child: ListView(scrollDirection: Axis.horizontal, children: ['All', 'Food', 'Transport', 'Home', 'Shopping', 'Health', 'Other'].map((category) => Padding(padding: const EdgeInsets.only(right: 8), child: ChoiceChip(label: Text(category), selected: _expenseCategory == category, onSelected: (_) => setState(() => _expenseCategory = category)))).toList())),
+          const SizedBox(height: 20),
+          _sectionTitle('All transactions', 'Add expense', onTap: _addExpense),
+          const SizedBox(height: 12),
+          if (_filteredExpenses.isEmpty) _emptyState(_expenses.isEmpty ? 'No expenses yet' : 'No matching expenses', _expenses.isEmpty ? 'Tap Add expense to record a purchase.' : 'Try another search or category.') else ..._filteredExpenses.map(_expenseTile),
+        ]),
+      );
+  Widget _debtsPage() => _shell(eyebrow: 'Split with ease', title: 'People & balances', child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Row(children: [_miniBalance('To receive', _received, _green), const SizedBox(width: 12), _miniBalance('To pay', _owed, _pink)]), const SizedBox(height: 26), _sectionTitle('Open balances', 'Add balance', onTap: _addDebt), const SizedBox(height: 12), if (_debts.isEmpty) _emptyState('No balances yet', 'Add a person, amount, and due date to start tracking.') else ..._debts.where((item) => !item.settled).map((item) => _debtTile(item)), const SizedBox(height: 16), if (_debts.any((item) => item.settled)) _sectionTitle('Settled', '${_debts.where((item) => item.settled).length}'), ..._debts.where((item) => item.settled).map((item) => _debtTile(item))]));
+  Widget _debtTile(MoneyEntry item) => Container(
+        margin: const EdgeInsets.only(bottom: 10),
+        padding: const EdgeInsets.all(15),
+        decoration: BoxDecoration(color: _panel, borderRadius: BorderRadius.circular(15), border: Border.all(color: Colors.white.withValues(alpha: .06))),
+        child: Row(children: [
+          CircleAvatar(backgroundColor: (item.isOwedToMe ? _green : _pink).withValues(alpha: .16), child: Text(item.name.substring(0, 1).toUpperCase(), style: TextStyle(color: item.isOwedToMe ? _green : _pink, fontWeight: FontWeight.w700))),
+          const SizedBox(width: 12),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(item.name, style: const TextStyle(fontWeight: FontWeight.w700)), const SizedBox(height: 3), Text('${item.note} · Due ${_date(item.dueDate)}', style: const TextStyle(color: _muted, fontSize: 13))])),
+          Column(crossAxisAlignment: CrossAxisAlignment.end, children: [Text('${item.isOwedToMe ? '+' : '-'}Rs. ${item.amount.toStringAsFixed(2)}', style: TextStyle(color: item.isOwedToMe ? _green : _pink, fontWeight: FontWeight.w700)), if (!item.settled) TextButton(onPressed: () => _settleDebt(item), child: const Text('Settle'))]),
+        ]),
+      );
+  Widget _settingsPage() => _shell(eyebrow: 'Stay on track', title: 'Budget & settings', child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [_budgetCard(), const SizedBox(height: 24), _sectionTitle('Preferences', 'Stored on this device'), const SizedBox(height: 10), _settingTile(Icons.currency_exchange_rounded, 'Default currency', 'PKR — Pakistani Rupee', onTap: () => _showSnack('Koin Flow is configured for PKR.')), _settingTile(Icons.lock_outline_rounded, 'Privacy lock', _privacyLock ? 'On' : 'Off', onTap: () { setState(() => _privacyLock = !_privacyLock); _save(); }), _settingTile(Icons.file_download_outlined, 'Export ledger', 'Copy JSON backup', onTap: _showExport), const SizedBox(height: 18), Center(child: Text('Koin Flow 1.0.0 · Local only', style: TextStyle(color: _muted.withValues(alpha: .65), fontSize: 12)))]));
+  Widget _budgetCard() => Container(padding: const EdgeInsets.all(19), decoration: BoxDecoration(color: _panel, borderRadius: BorderRadius.circular(16), border: Border.all(color: Colors.white.withValues(alpha: .06))), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Row(children: [const Expanded(child: Text('Monthly budget', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700))), Text('Rs. ${_budget.toStringAsFixed(0)}', style: const TextStyle(color: _violet, fontSize: 20, fontWeight: FontWeight.w700))]), const SizedBox(height: 18), ClipRRect(borderRadius: BorderRadius.circular(6), child: LinearProgressIndicator(value: (_spent / _budget).clamp(0, 1), minHeight: 9, backgroundColor: _panelHigh, color: _spent > _budget ? _pink : _green)), const SizedBox(height: 10), Text('Rs. ${_spent.toStringAsFixed(0)} spent of Rs. ${_budget.toStringAsFixed(0)}', style: const TextStyle(color: _muted, fontSize: 13)), Slider(value: _budget, min: 5000, max: 1000000, divisions: 199, onChanged: (value) { setState(() => _budget = value); _save(); })]));
+  Widget _settingTile(IconData icon, String title, String subtitle, {required VoidCallback onTap}) => ListTile(onTap: onTap, contentPadding: const EdgeInsets.symmetric(vertical: 2), leading: Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: _panel, borderRadius: BorderRadius.circular(12)), child: Icon(icon, color: _violet, size: 20)), title: Text(title, style: const TextStyle(fontWeight: FontWeight.w600)), subtitle: Text(subtitle, style: const TextStyle(color: _muted, fontSize: 13)), trailing: const Icon(Icons.chevron_right_rounded, color: _muted));
+  Widget _expenseTile(Expense item) => Dismissible(key: ValueKey('${item.title}-${item.date}'), onDismissed: (_) { setState(() => _expenses.remove(item)); _save(); }, background: Container(color: _pink.withValues(alpha: .15), alignment: Alignment.centerRight, padding: const EdgeInsets.only(right: 20), child: const Icon(Icons.delete_outline, color: _pink)), child: Container(margin: const EdgeInsets.only(bottom: 9), padding: const EdgeInsets.all(13), decoration: BoxDecoration(color: _panel, borderRadius: BorderRadius.circular(15)), child: Row(children: [Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: _violet.withValues(alpha: .12), borderRadius: BorderRadius.circular(12)), child: Icon(_categoryIcon(item.category), color: _violet, size: 20)), const SizedBox(width: 12), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(item.title, style: const TextStyle(fontWeight: FontWeight.w700)), const SizedBox(height: 3), Text('${item.category} · ${_date(item.date)}', style: const TextStyle(color: _muted, fontSize: 12))])), Text('-Rs. ${item.amount.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.w700, color: _pink))])));
   Widget _sectionTitle(String title, String action, {VoidCallback? onTap}) => Row(children: [Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)), const Spacer(), GestureDetector(onTap: onTap, child: Text(action, style: const TextStyle(color: _violet, fontSize: 13, fontWeight: FontWeight.w600)))]);
-  Widget _miniBalance(String label, double amount, Color color) => Expanded(child: Container(padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: _panel, borderRadius: BorderRadius.circular(15)), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(label, style: const TextStyle(color: _muted, fontSize: 12)), const SizedBox(height: 7), Text('\$${amount.toStringAsFixed(2)}', style: TextStyle(color: color, fontSize: 20, fontWeight: FontWeight.w700))])));
+  Widget _miniBalance(String label, double amount, Color color) => Expanded(child: Container(padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: _panel, borderRadius: BorderRadius.circular(15)), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(label, style: const TextStyle(color: _muted, fontSize: 12)), const SizedBox(height: 7), Text('Rs. ${amount.toStringAsFixed(2)}', style: TextStyle(color: color, fontSize: 20, fontWeight: FontWeight.w700))])));
   Widget _emptyState(String title, String subtitle) => Container(width: double.infinity, padding: const EdgeInsets.symmetric(vertical: 28, horizontal: 18), decoration: BoxDecoration(color: _panel, borderRadius: BorderRadius.circular(16)), child: Column(children: [const Icon(Icons.auto_awesome_rounded, color: _violet, size: 28), const SizedBox(height: 10), Text(title, style: const TextStyle(fontWeight: FontWeight.w700)), const SizedBox(height: 5), Text(subtitle, textAlign: TextAlign.center, style: const TextStyle(color: _muted, fontSize: 13))]));
   void _showSnack(String message) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message), behavior: SnackBarBehavior.floating));
 }
@@ -140,7 +207,37 @@ class _AddExpenseSheetState extends State<AddExpenseSheet> {
   @override
   void dispose() { _title.dispose(); _amount.dispose(); super.dispose(); }
   @override
-  Widget build(BuildContext context) => Padding(padding: EdgeInsets.fromLTRB(20, 14, 20, MediaQuery.viewInsetsOf(context).bottom + 20), child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [Row(children: [const Expanded(child: Text('New expense', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700))), IconButton(onPressed: () => Navigator.pop(context), icon: const Icon(Icons.close))]), const SizedBox(height: 12), TextField(controller: _title, autofocus: true, decoration: const InputDecoration(labelText: 'What did you spend on?', prefixIcon: Icon(Icons.edit_outlined))), const SizedBox(height: 12), TextField(controller: _amount, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'Amount', prefixText: '\$ ')), const SizedBox(height: 12), DropdownButtonFormField<String>(initialValue: _category, dropdownColor: _panelHigh, decoration: const InputDecoration(labelText: 'Category'), items: ['Food', 'Transport', 'Home', 'Shopping', 'Health', 'Other'].map((item) => DropdownMenuItem(value: item, child: Text(item))).toList(), onChanged: (value) => setState(() => _category = value!)), const SizedBox(height: 18), SizedBox(width: double.infinity, child: FilledButton(onPressed: () { final amount = double.tryParse(_amount.text.replaceAll(',', '')); if (_title.text.trim().isEmpty || amount == null || amount <= 0) return; Navigator.pop(context, Expense(title: _title.text.trim(), amount: amount, category: _category, date: DateTime.now())); }, style: FilledButton.styleFrom(backgroundColor: _violet, foregroundColor: const Color(0xFF1000A9), padding: const EdgeInsets.symmetric(vertical: 15)), child: const Text('Save expense', style: TextStyle(fontWeight: FontWeight.w700))))]));
+  Widget build(BuildContext context) => Padding(padding: EdgeInsets.fromLTRB(20, 14, 20, MediaQuery.viewInsetsOf(context).bottom + 20), child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [Row(children: [const Expanded(child: Text('New expense', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700))), IconButton(onPressed: () => Navigator.pop(context), icon: const Icon(Icons.close))]), const SizedBox(height: 12), TextField(controller: _title, autofocus: true, decoration: const InputDecoration(labelText: 'What did you spend on?', prefixIcon: Icon(Icons.edit_outlined))), const SizedBox(height: 12), TextField(controller: _amount, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'Amount', prefixText: 'Rs. ')), const SizedBox(height: 12), DropdownButtonFormField<String>(initialValue: _category, dropdownColor: _panelHigh, decoration: const InputDecoration(labelText: 'Category'), items: ['Food', 'Transport', 'Home', 'Shopping', 'Health', 'Other'].map((item) => DropdownMenuItem(value: item, child: Text(item))).toList(), onChanged: (value) => setState(() => _category = value!)), const SizedBox(height: 18), SizedBox(width: double.infinity, child: FilledButton(onPressed: () { final amount = double.tryParse(_amount.text.replaceAll(',', '')); if (_title.text.trim().isEmpty || amount == null || amount <= 0) return; Navigator.pop(context, Expense(title: _title.text.trim(), amount: amount, category: _category, date: DateTime.now())); }, style: FilledButton.styleFrom(backgroundColor: _violet, foregroundColor: const Color(0xFF1000A9), padding: const EdgeInsets.symmetric(vertical: 15)), child: const Text('Save expense', style: TextStyle(fontWeight: FontWeight.w700))))]));
+}
+
+class AddMoneySheet extends StatefulWidget {
+  const AddMoneySheet({super.key});
+  @override
+  State<AddMoneySheet> createState() => _AddMoneySheetState();
+}
+
+class _AddMoneySheetState extends State<AddMoneySheet> {
+  final _name = TextEditingController();
+  final _amount = TextEditingController();
+  final _note = TextEditingController();
+  DateTime _dueDate = DateTime.now().add(const Duration(days: 14));
+  bool _isOwedToMe = true;
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _amount.dispose();
+    _note.dispose();
+    super.dispose();
+  }
+
+  Future<void> _chooseDate() async {
+    final picked = await showDatePicker(context: context, initialDate: _dueDate, firstDate: DateTime.now().subtract(const Duration(days: 365)), lastDate: DateTime.now().add(const Duration(days: 3650)));
+    if (picked != null) setState(() => _dueDate = picked);
+  }
+
+  @override
+  Widget build(BuildContext context) => Padding(padding: EdgeInsets.fromLTRB(20, 14, 20, MediaQuery.viewInsetsOf(context).bottom + 20), child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [Row(children: [const Expanded(child: Text('Add People', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700))), IconButton(onPressed: () => Navigator.pop(context), icon: const Icon(Icons.close))]), const SizedBox(height: 12), SegmentedButton<bool>(segments: const [ButtonSegment(value: true, label: Text('They owe me')), ButtonSegment(value: false, label: Text('I owe them'))], selected: {_isOwedToMe}, onSelectionChanged: (value) => setState(() => _isOwedToMe = value.first)), const SizedBox(height: 12), TextField(controller: _name, decoration: const InputDecoration(labelText: 'Person name', prefixIcon: Icon(Icons.person_outline))), const SizedBox(height: 12), TextField(controller: _amount, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'Amount', prefixText: 'Rs. ')), const SizedBox(height: 12), TextField(controller: _note, decoration: const InputDecoration(labelText: 'What is it for?', prefixIcon: Icon(Icons.notes_outlined))), const SizedBox(height: 12), ListTile(contentPadding: EdgeInsets.zero, onTap: _chooseDate, leading: const Icon(Icons.event_outlined, color: _violet), title: const Text('Due date'), subtitle: Text(_date(_dueDate)), trailing: const Icon(Icons.chevron_right_rounded)), const SizedBox(height: 12), SizedBox(width: double.infinity, child: FilledButton(onPressed: () { final amount = double.tryParse(_amount.text.replaceAll(',', '')); if (_name.text.trim().isEmpty || amount == null || amount <= 0) return; Navigator.pop(context, MoneyEntry(id: DateTime.now().microsecondsSinceEpoch.toString(), name: _name.text.trim(), amount: amount, note: _note.text.trim().isEmpty ? 'Personal balance' : _note.text.trim(), isOwedToMe: _isOwedToMe, dueDate: _dueDate)); }, style: FilledButton.styleFrom(backgroundColor: _violet, foregroundColor: const Color(0xFF003732), minimumSize: const Size.fromHeight(50)), child: const Text('Save balance', style: TextStyle(fontWeight: FontWeight.w700))))]));
 }
 
 class KoinLogo extends StatelessWidget {

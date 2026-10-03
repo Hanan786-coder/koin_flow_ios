@@ -22,5 +22,6 @@ void main() {
     await tester.pump(const Duration(milliseconds: 250));
     expect(find.text('Daily expenses'), findsOneWidget);
     expect(find.text('Add expense'), findsOneWidget);
+
   });
 }
