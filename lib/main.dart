@@ -421,6 +421,7 @@ class _HomePageState extends State<HomePage> {
       .where((item) => !item.isOwedToMe && !item.settled)
       .fold(0, (sum, item) => sum + item.amount);
   double get _availableBalance => _budget - _spent + _settledReceived - _owed;
+  double get _netLiquidity => _availableBalance + _received;
   bool _matchesDate(DateTime date) {
     final now = DateTime.now();
     final normalized = DateTime(date.year, date.month, date.day);
@@ -995,7 +996,7 @@ class _HomePageState extends State<HomePage> {
         ),
         const SizedBox(height: 8),
         Text(
-          'Rs. ${_availableBalance.toStringAsFixed(2)}',
+          'Rs. ${_netLiquidity.toStringAsFixed(2)}',
           style: const TextStyle(fontSize: 32, fontWeight: FontWeight.w800),
         ),
         const SizedBox(height: 18),
