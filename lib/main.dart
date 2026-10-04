@@ -15,7 +15,7 @@ const _green = Color(0xFF4EDEA3);
 const _gold = Color(0xFFF7BE1D);
 const _pink = Color(0xFFF43F5E);
 
-void main() => runApp(const KoinFlowApp());
+void main() => runApp(const _KoinFlowBootApp());
 
 class Expense {
   Expense({
@@ -49,7 +49,7 @@ class MoneyEntry {
     required this.amount,
     required this.note,
     required this.isOwedToMe,
-    required this.dueDate,
+    this.dueDate,
     this.settled = false,
   });
   final String id;
@@ -57,7 +57,7 @@ class MoneyEntry {
   final double amount;
   final String note;
   final bool isOwedToMe;
-  final DateTime dueDate;
+  final DateTime? dueDate;
   final bool settled;
 
   MoneyEntry copyWith({bool? settled}) => MoneyEntry(
@@ -75,7 +75,7 @@ class MoneyEntry {
     'amount': amount,
     'note': note,
     'isOwedToMe': isOwedToMe,
-    'dueDate': dueDate.toIso8601String(),
+    'dueDate': dueDate?.toIso8601String(),
     'settled': settled,
   };
   factory MoneyEntry.fromJson(Map<String, dynamic> json) => MoneyEntry(
@@ -84,7 +84,7 @@ class MoneyEntry {
     amount: (json['amount'] as num).toDouble(),
     note: json['note'] as String,
     isOwedToMe: json['isOwedToMe'] as bool,
-    dueDate: DateTime.parse(json['dueDate'] as String),
+    dueDate: json['dueDate'] != null ? DateTime.parse(json['dueDate'] as String) : null,
     settled: json['settled'] as bool? ?? false,
   );
 }
@@ -123,6 +123,133 @@ class KoinFlowApp extends StatelessWidget {
   }
 }
 
+class _KoinFlowBootApp extends StatefulWidget {
+  const _KoinFlowBootApp();
+
+  @override
+  State<_KoinFlowBootApp> createState() => _KoinFlowBootAppState();
+}
+
+class _KoinFlowBootAppState extends State<_KoinFlowBootApp>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _splashController;
+
+  @override
+  void initState() {
+    super.initState();
+    _splashController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1800),
+    );
+    _splashController.forward();
+  }
+
+  @override
+  void dispose() {
+    _splashController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Directionality(
+      textDirection: TextDirection.ltr,
+      child: Stack(
+        children: [
+          const KoinFlowApp(),
+          AnimatedBuilder(
+            animation: _splashController,
+            builder: (context, child) => IgnorePointer(
+              ignoring: _splashController.status == AnimationStatus.completed,
+              child: child,
+            ),
+            child: _SplashScreen(controller: _splashController),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SplashScreen extends StatelessWidget {
+  const _SplashScreen({required this.controller});
+  final AnimationController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final scaleAnimation =
+        Tween<double>(begin: 0.8, end: 1.2).animate(
+          CurvedAnimation(
+            parent: controller,
+            curve: const Interval(0, 0.6, curve: Curves.easeOutCubic),
+          ),
+        );
+    final opacityAnimation = Tween<double>(begin: 1, end: 0).animate(
+      CurvedAnimation(
+        parent: controller,
+        curve: const Interval(0.7, 1, curve: Curves.easeInCubic),
+      ),
+    );
+
+    return AnimatedBuilder(
+      animation: controller,
+      builder: (context, child) => Opacity(
+        opacity: opacityAnimation.value,
+        child: Container(
+          color: _bg,
+          child: Center(
+            child: Transform.scale(
+              scale: scaleAnimation.value,
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Transform.rotate(
+                    angle: (1 - controller.value) * 0.3,
+                    child: const KoinLogo(size: 80),
+                  ),
+                  const SizedBox(height: 20),
+                  ScaleTransition(
+                    scale: Tween<double>(begin: 0.9, end: 1)
+                        .animate(CurvedAnimation(
+                          parent: controller,
+                          curve: Curves.easeOut,
+                        )),
+                    child: const Text(
+                      'Koin Flow',
+                      style: TextStyle(
+                        fontSize: 28,
+                        fontWeight: FontWeight.w800,
+                        color: _violet,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  FadeTransition(
+                    opacity: Tween<double>(begin: 0.6, end: 0)
+                        .animate(CurvedAnimation(
+                          parent: controller,
+                          curve: Curves.easeIn,
+                        )),
+                    child: const Text(
+                      'Track your flow',
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: _muted,
+                        letterSpacing: 0.3,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
   @override
@@ -142,6 +269,8 @@ class _HomePageState extends State<HomePage> {
   String _expenseCategory = 'All';
   String _dateFilter = 'All time';
   DateTime? _specificDate;
+  int? _filterMonth;
+  int? _filterYear;
   bool _sortNewestFirst = true;
   String _chartRange = 'Weekly';
   bool _privacyLock = false;
@@ -285,6 +414,11 @@ class _HomePageState extends State<HomePage> {
             !normalized.isAfter(today),
       'This month' =>
         normalized.year == today.year && normalized.month == today.month,
+      'Specific month' =>
+        _filterMonth != null &&
+            _filterYear != null &&
+            date.year == _filterYear &&
+            date.month == _filterMonth,
       'Specific date' =>
         _specificDate != null &&
             normalized ==
@@ -325,12 +459,16 @@ class _HomePageState extends State<HomePage> {
               item.name.toLowerCase().contains(_debtQuery.toLowerCase()) ||
               item.note.toLowerCase().contains(_debtQuery.toLowerCase()),
         )
-        .where((item) => _matchesDate(item.dueDate))
+        .where((item) => item.dueDate == null || _matchesDate(item.dueDate!))
         .toList();
     result.sort(
-      (a, b) => _sortNewestFirst
-          ? b.dueDate.compareTo(a.dueDate)
-          : a.dueDate.compareTo(b.dueDate),
+      (a, b) {
+        final aDate = a.dueDate ?? DateTime(2099);
+        final bDate = b.dueDate ?? DateTime(2099);
+        return _sortNewestFirst
+            ? bDate.compareTo(aDate)
+            : aDate.compareTo(bDate);
+      },
     );
     return result;
   }
@@ -368,6 +506,20 @@ class _HomePageState extends State<HomePage> {
           )
           .toList(),
     );
+    
+    // If I gave them money (I owe them), create an expense entry
+    if (!item.isOwedToMe) {
+      setState(() => _expenses = [
+        Expense(
+          title: '${item.name} - Settled',
+          amount: item.amount,
+          category: 'Other',
+          date: DateTime.now(),
+        ),
+        ..._expenses,
+      ]);
+    }
+    
     await _save();
   }
 
@@ -432,6 +584,7 @@ class _HomePageState extends State<HomePage> {
     await showModalBottomSheet<void>(
       context: context,
       backgroundColor: _panel,
+      isScrollControlled: true,
       builder: (sheetContext) => StatefulBuilder(
         builder: (context, setSheetState) => Padding(
           padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
@@ -469,6 +622,7 @@ class _HomePageState extends State<HomePage> {
                           'Today',
                           'This week',
                           'This month',
+                          'Specific month',
                           'Specific date',
                         ]
                         .map(
@@ -479,7 +633,25 @@ class _HomePageState extends State<HomePage> {
                         )
                         .toList(),
                 onChanged: (value) async {
-                  if (value == 'Specific date') {
+                  if (value == 'Specific month') {
+                    final now = DateTime.now();
+                    final picked = await showDatePicker(
+                      context: sheetContext,
+                      initialDate: _filterYear != null && _filterMonth != null
+                          ? DateTime(_filterYear!, _filterMonth!)
+                          : now,
+                      firstDate: DateTime(2020),
+                      lastDate: DateTime(2100),
+                    );
+                    if (picked != null) {
+                      setSheetState(() {});
+                      setState(() {
+                        _filterMonth = picked.month;
+                        _filterYear = picked.year;
+                        _dateFilter = value!;
+                      });
+                    }
+                  } else if (value == 'Specific date') {
                     final picked = await showDatePicker(
                       context: sheetContext,
                       initialDate: _specificDate ?? DateTime.now(),
@@ -498,6 +670,8 @@ class _HomePageState extends State<HomePage> {
                     setState(() {
                       _dateFilter = value!;
                       _specificDate = null;
+                      _filterMonth = null;
+                      _filterYear = null;
                     });
                   }
                 },
@@ -875,7 +1049,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   List<String> _chartLabels(DateTime today) {
-    if (_chartRange == 'Yearly')
+    if (_chartRange == 'Yearly') {
       return const [
         'Jan',
         'Feb',
@@ -890,8 +1064,10 @@ class _HomePageState extends State<HomePage> {
         'Nov',
         'Dec',
       ];
-    if (_chartRange == 'Monthly')
+    }
+    if (_chartRange == 'Monthly') {
       return List.generate(5, (index) => 'W${index + 1}');
+    }
     return List.generate(
       7,
       (index) => _weekday(today.subtract(Duration(days: 6 - index))),
@@ -1070,7 +1246,7 @@ class _HomePageState extends State<HomePage> {
         ),
         const SizedBox(height: 8),
         Text(
-          '${_dateFilter == 'Specific date' && _specificDate != null ? _date(_specificDate!) : _dateFilter} · ${_sortNewestFirst ? 'Newest first' : 'Oldest first'}',
+          '${_dateFilter == 'Specific month' && _filterMonth != null ? 'Month: ${_monthName(_filterMonth!)} ${_filterYear!}' : _dateFilter == 'Specific date' && _specificDate != null ? _date(_specificDate!) : _dateFilter} · ${_sortNewestFirst ? 'Newest first' : 'Oldest first'}',
           style: const TextStyle(color: _muted, fontSize: 12),
         ),
         const SizedBox(height: 12),
@@ -1177,20 +1353,25 @@ class _HomePageState extends State<HomePage> {
     margin: const EdgeInsets.only(bottom: 10),
     padding: const EdgeInsets.all(15),
     decoration: BoxDecoration(
-      color: _panel,
+      color: item.settled ? _panelHigh : _panel,
       borderRadius: BorderRadius.circular(15),
-      border: Border.all(color: Colors.white.withValues(alpha: .06)),
+      border: Border.all(
+        color: item.settled
+            ? Colors.white.withValues(alpha: .03)
+            : Colors.white.withValues(alpha: .06),
+      ),
     ),
     child: Row(
       children: [
         CircleAvatar(
           backgroundColor: (item.isOwedToMe ? _green : _pink).withValues(
-            alpha: .16,
+            alpha: item.settled ? .08 : .16,
           ),
           child: Text(
             item.name.substring(0, 1).toUpperCase(),
             style: TextStyle(
-              color: item.isOwedToMe ? _green : _pink,
+              color: (item.isOwedToMe ? _green : _pink)
+                  .withValues(alpha: item.settled ? 0.6 : 1.0),
               fontWeight: FontWeight.w700,
             ),
           ),
@@ -1202,12 +1383,19 @@ class _HomePageState extends State<HomePage> {
             children: [
               Text(
                 item.name,
-                style: const TextStyle(fontWeight: FontWeight.w700),
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  decoration: item.settled ? TextDecoration.lineThrough : null,
+                  color: item.settled ? _muted : _ink,
+                ),
               ),
               const SizedBox(height: 3),
               Text(
-                '${item.note} · Due ${_date(item.dueDate)}',
-                style: const TextStyle(color: _muted, fontSize: 13),
+                '${item.note}${item.dueDate != null ? ' · Due ${_date(item.dueDate!)}' : ''}',
+                style: TextStyle(
+                  color: item.settled ? _muted.withValues(alpha: .6) : _muted,
+                  fontSize: 13,
+                ),
               ),
             ],
           ),
@@ -1220,13 +1408,16 @@ class _HomePageState extends State<HomePage> {
               style: TextStyle(
                 color: item.isOwedToMe ? _green : _pink,
                 fontWeight: FontWeight.w700,
+                decoration: item.settled ? TextDecoration.lineThrough : null,
               ),
             ),
             if (!item.settled)
               TextButton(
                 onPressed: () => _settleDebt(item),
                 child: const Text('Settle'),
-              ),
+              )
+            else
+              const SizedBox(height: 32),
           ],
         ),
       ],
@@ -1305,15 +1496,36 @@ class _HomePageState extends State<HomePage> {
           ],
         ),
         const SizedBox(height: 14),
-        TextField(
-          controller: _budgetController,
-          keyboardType: const TextInputType.numberWithOptions(decimal: false),
-          textInputAction: TextInputAction.done,
-          onSubmitted: _setBudgetFromText,
-          decoration: const InputDecoration(
-            labelText: 'Type monthly limit',
-            prefixText: 'Rs. ',
-            suffixIcon: Icon(Icons.check_circle_outline),
+        GestureDetector(
+          onTap: () {
+            _budgetController.selection = TextSelection(
+              baseOffset: 0,
+              extentOffset: _budgetController.text.length,
+            );
+            FocusScope.of(context).requestFocus(FocusNode());
+            Future.delayed(
+              const Duration(milliseconds: 100),
+              () => FocusScope.of(context).requestFocus(FocusNode()),
+            );
+          },
+          child: TextField(
+            controller: _budgetController,
+            keyboardType: const TextInputType.numberWithOptions(decimal: false),
+            textInputAction: TextInputAction.done,
+            onSubmitted: _setBudgetFromText,
+            onChanged: (value) {
+              if (value.isEmpty) {
+                _budgetController.text = _budget.toStringAsFixed(0);
+              }
+            },
+            decoration: InputDecoration(
+              labelText: 'Type monthly limit',
+              prefixText: 'Rs. ',
+              suffixIcon: GestureDetector(
+                onTap: () => _setBudgetFromText(_budgetController.text),
+                child: const Icon(Icons.check_circle_outline, color: _violet),
+              ),
+            ),
           ),
         ),
         const SizedBox(height: 18),
@@ -1575,8 +1787,9 @@ class _AddExpenseSheetState extends State<AddExpenseSheet> {
           child: FilledButton(
             onPressed: () {
               final amount = double.tryParse(_amount.text.replaceAll(',', ''));
-              if (_title.text.trim().isEmpty || amount == null || amount <= 0)
+              if (_title.text.trim().isEmpty || amount == null || amount <= 0) {
                 return;
+              }
               Navigator.pop(
                 context,
                 Expense(
@@ -1613,8 +1826,9 @@ class _AddMoneySheetState extends State<AddMoneySheet> {
   final _name = TextEditingController();
   final _amount = TextEditingController();
   final _note = TextEditingController();
-  DateTime _dueDate = DateTime.now().add(const Duration(days: 14));
+  DateTime? _dueDate;
   bool _isOwedToMe = true;
+  bool _setDueDate = false;
 
   @override
   void dispose() {
@@ -1627,7 +1841,7 @@ class _AddMoneySheetState extends State<AddMoneySheet> {
   Future<void> _chooseDate() async {
     final picked = await showDatePicker(
       context: context,
-      initialDate: _dueDate,
+      initialDate: _dueDate ?? DateTime.now().add(const Duration(days: 14)),
       firstDate: DateTime.now().subtract(const Duration(days: 365)),
       lastDate: DateTime.now().add(const Duration(days: 3650)),
     );
@@ -1642,102 +1856,118 @@ class _AddMoneySheetState extends State<AddMoneySheet> {
       20,
       MediaQuery.viewInsetsOf(context).bottom + 20,
     ),
-    child: Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            const Expanded(
-              child: Text(
-                'Add People',
-                style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700),
+    child: SingleChildScrollView(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  'Add Balance',
+                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700),
+                ),
+              ),
+              IconButton(
+                onPressed: () => Navigator.pop(context),
+                icon: const Icon(Icons.close),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          SegmentedButton<bool>(
+            segments: const [
+              ButtonSegment(value: true, label: Text('They owe me')),
+              ButtonSegment(value: false, label: Text('I owe them')),
+            ],
+            selected: {_isOwedToMe},
+            onSelectionChanged: (value) =>
+                setState(() => _isOwedToMe = value.first),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _name,
+            decoration: const InputDecoration(
+              labelText: 'Person name',
+              prefixIcon: Icon(Icons.person_outline),
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _amount,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            decoration: const InputDecoration(
+              labelText: 'Amount',
+              prefixText: 'Rs. ',
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _note,
+            decoration: const InputDecoration(
+              labelText: 'What is it for?',
+              prefixIcon: Icon(Icons.notes_outlined),
+            ),
+          ),
+          const SizedBox(height: 12),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Set due date'),
+            subtitle: const Text('Optional — set a reminder for payment'),
+            value: _setDueDate,
+            onChanged: (value) {
+              setState(() => _setDueDate = value);
+              if (value && _dueDate == null) {
+                _dueDate = DateTime.now().add(const Duration(days: 14));
+              }
+            },
+          ),
+          if (_setDueDate)
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              onTap: _chooseDate,
+              leading: const Icon(Icons.event_outlined, color: _violet),
+              title: const Text('Due date'),
+              subtitle: Text(_date(_dueDate ?? DateTime.now())),
+              trailing: const Icon(Icons.chevron_right_rounded),
+            ),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton(
+              onPressed: () {
+                final amount = double.tryParse(_amount.text.replaceAll(',', ''));
+                if (_name.text.trim().isEmpty || amount == null || amount <= 0) {
+                  return;
+                }
+                Navigator.pop(
+                  context,
+                  MoneyEntry(
+                    id: DateTime.now().microsecondsSinceEpoch.toString(),
+                    name: _name.text.trim(),
+                    amount: amount,
+                    note: _note.text.trim().isEmpty
+                        ? 'Personal balance'
+                        : _note.text.trim(),
+                    isOwedToMe: _isOwedToMe,
+                    dueDate: _setDueDate ? _dueDate : null,
+                  ),
+                );
+              },
+              style: FilledButton.styleFrom(
+                backgroundColor: _violet,
+                foregroundColor: const Color(0xFF003732),
+                minimumSize: const Size.fromHeight(50),
+              ),
+              child: const Text(
+                'Save balance',
+                style: TextStyle(fontWeight: FontWeight.w700),
               ),
             ),
-            IconButton(
-              onPressed: () => Navigator.pop(context),
-              icon: const Icon(Icons.close),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
-        SegmentedButton<bool>(
-          segments: const [
-            ButtonSegment(value: true, label: Text('They owe me')),
-            ButtonSegment(value: false, label: Text('I owe them')),
-          ],
-          selected: {_isOwedToMe},
-          onSelectionChanged: (value) =>
-              setState(() => _isOwedToMe = value.first),
-        ),
-        const SizedBox(height: 12),
-        TextField(
-          controller: _name,
-          decoration: const InputDecoration(
-            labelText: 'Person name',
-            prefixIcon: Icon(Icons.person_outline),
           ),
-        ),
-        const SizedBox(height: 12),
-        TextField(
-          controller: _amount,
-          keyboardType: const TextInputType.numberWithOptions(decimal: true),
-          decoration: const InputDecoration(
-            labelText: 'Amount',
-            prefixText: 'Rs. ',
-          ),
-        ),
-        const SizedBox(height: 12),
-        TextField(
-          controller: _note,
-          decoration: const InputDecoration(
-            labelText: 'What is it for?',
-            prefixIcon: Icon(Icons.notes_outlined),
-          ),
-        ),
-        const SizedBox(height: 12),
-        ListTile(
-          contentPadding: EdgeInsets.zero,
-          onTap: _chooseDate,
-          leading: const Icon(Icons.event_outlined, color: _violet),
-          title: const Text('Due date'),
-          subtitle: Text(_date(_dueDate)),
-          trailing: const Icon(Icons.chevron_right_rounded),
-        ),
-        const SizedBox(height: 12),
-        SizedBox(
-          width: double.infinity,
-          child: FilledButton(
-            onPressed: () {
-              final amount = double.tryParse(_amount.text.replaceAll(',', ''));
-              if (_name.text.trim().isEmpty || amount == null || amount <= 0)
-                return;
-              Navigator.pop(
-                context,
-                MoneyEntry(
-                  id: DateTime.now().microsecondsSinceEpoch.toString(),
-                  name: _name.text.trim(),
-                  amount: amount,
-                  note: _note.text.trim().isEmpty
-                      ? 'Personal balance'
-                      : _note.text.trim(),
-                  isOwedToMe: _isOwedToMe,
-                  dueDate: _dueDate,
-                ),
-              );
-            },
-            style: FilledButton.styleFrom(
-              backgroundColor: _violet,
-              foregroundColor: const Color(0xFF003732),
-              minimumSize: const Size.fromHeight(50),
-            ),
-            child: const Text(
-              'Save balance',
-              style: TextStyle(fontWeight: FontWeight.w700),
-            ),
-          ),
-        ),
-      ],
+        ],
+      ),
     ),
   );
 }
@@ -1745,42 +1975,16 @@ class _AddMoneySheetState extends State<AddMoneySheet> {
 class KoinLogo extends StatelessWidget {
   const KoinLogo({super.key, this.size = 48});
   final double size;
-  @override
-  Widget build(BuildContext context) =>
-      CustomPaint(size: Size.square(size), painter: _LogoPainter());
-}
-
-class _LogoPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final scale = size.width / 48;
-    final paint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 5 * scale
-      ..strokeCap = StrokeCap.round;
-    paint.color = _violet;
-    canvas.drawArc(
-      Rect.fromLTWH(7 * scale, 7 * scale, 34 * scale, 34 * scale),
-      -.7,
-      4.55,
-      false,
-      paint,
-    );
-    paint.color = _green;
-    canvas.drawLine(
-      Offset(24 * scale, 12 * scale),
-      Offset(24 * scale, 36 * scale),
-      paint,
-    );
-    canvas.drawLine(
-      Offset(17 * scale, 24 * scale),
-      Offset(31 * scale, 24 * scale),
-      paint,
-    );
-  }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  Widget build(BuildContext context) => Image.asset(
+    'assets/koin_logo.png',
+    width: size,
+    height: size,
+    fit: BoxFit.contain,
+    filterQuality: FilterQuality.high,
+    semanticLabel: 'Koin Flow logo',
+  );
 }
 
 class _CashflowPainter extends CustomPainter {
@@ -1847,5 +2051,9 @@ IconData _categoryIcon(String category) => switch (category) {
   _ => Icons.more_horiz_rounded,
 };
 String _date(DateTime date) => '${date.month}/${date.day}';
+String _monthName(int month) => const [
+  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+][month - 1];
 String _weekday(DateTime date) =>
     const ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][date.weekday - 1];
