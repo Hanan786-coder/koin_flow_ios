@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -810,33 +811,73 @@ class _HomePageState extends State<HomePage> {
       body: SafeArea(
         child: IndexedStack(index: _tab, children: pages),
       ),
-      bottomNavigationBar: NavigationBar(
-        backgroundColor: _panel,
-        indicatorColor: _violet.withValues(alpha: .18),
-        selectedIndex: _tab,
-        onDestinationSelected: (value) => setState(() => _tab = value),
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.grid_view_rounded),
-            selectedIcon: Icon(Icons.grid_view_rounded, color: _violet),
-            label: 'Overview',
+      bottomNavigationBar: ClipRRect(
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        child: BackdropFilter(
+          filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+          child: Container(
+            decoration: BoxDecoration(
+              color: _bg.withValues(alpha: .78),
+              border: Border(
+                top: BorderSide(color: Colors.white.withValues(alpha: .12)),
+              ),
+            ),
+            child: NavigationBarTheme(
+              data: NavigationBarThemeData(
+                height: 76,
+                backgroundColor: Colors.transparent,
+                elevation: 0,
+                indicatorColor: _violet.withValues(alpha: .18),
+                indicatorShape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(18),
+                ),
+                labelTextStyle: WidgetStateProperty.resolveWith(
+                  (states) => TextStyle(
+                    color: states.contains(WidgetState.selected)
+                        ? _ink
+                        : _muted,
+                    fontSize: 12,
+                    fontWeight: states.contains(WidgetState.selected)
+                        ? FontWeight.w700
+                        : FontWeight.w600,
+                  ),
+                ),
+                iconTheme: WidgetStateProperty.resolveWith(
+                  (states) => IconThemeData(
+                    color: states.contains(WidgetState.selected)
+                        ? _violet
+                        : _muted,
+                    size: states.contains(WidgetState.selected) ? 25 : 23,
+                  ),
+                ),
+              ),
+              child: NavigationBar(
+                selectedIndex: _tab,
+                onDestinationSelected: (value) => setState(() => _tab = value),
+                labelBehavior:
+                    NavigationDestinationLabelBehavior.onlyShowSelected,
+                destinations: const [
+                  NavigationDestination(
+                    icon: Icon(Icons.grid_view_rounded),
+                    label: 'Overview',
+                  ),
+                  NavigationDestination(
+                    icon: Icon(Icons.receipt_long_outlined),
+                    label: 'Expenses',
+                  ),
+                  NavigationDestination(
+                    icon: Icon(Icons.swap_horiz_rounded),
+                    label: 'People',
+                  ),
+                  NavigationDestination(
+                    icon: Icon(Icons.tune_rounded),
+                    label: 'Budget',
+                  ),
+                ],
+              ),
+            ),
           ),
-          NavigationDestination(
-            icon: Icon(Icons.receipt_long_outlined),
-            selectedIcon: Icon(Icons.receipt_long, color: _violet),
-            label: 'Expenses',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.swap_horiz_rounded),
-            selectedIcon: Icon(Icons.swap_horiz_rounded, color: _violet),
-            label: 'People',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.tune_rounded),
-            selectedIcon: Icon(Icons.tune_rounded, color: _violet),
-            label: 'Budget',
-          ),
-        ],
+        ),
       ),
     );
   }
