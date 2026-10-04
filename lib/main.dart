@@ -262,6 +262,7 @@ class _HomePageState extends State<HomePage> {
   double _budgetSliderValue = 240000;
   DateTime? _budgetExpenseStart;
   final _budgetController = TextEditingController(text: '240000');
+  final _budgetFocusNode = FocusNode();
   List<Expense> _expenses = [];
   List<MoneyEntry> _debts = [];
   String _expenseQuery = '';
@@ -284,6 +285,7 @@ class _HomePageState extends State<HomePage> {
   @override
   void dispose() {
     _budgetController.dispose();
+    _budgetFocusNode.dispose();
     super.dispose();
   }
 
@@ -345,7 +347,11 @@ class _HomePageState extends State<HomePage> {
     final parsed = double.tryParse(
       value.replaceAll(',', '').replaceAll('Rs.', '').trim(),
     );
-    if (parsed == null || parsed <= 0) return;
+    if (parsed == null || parsed <= 0) {
+      _showSnack('Enter a budget greater than zero.');
+      return;
+    }
+    _budgetFocusNode.unfocus();
     await _confirmBudgetChange(parsed);
   }
 
@@ -386,6 +392,9 @@ class _HomePageState extends State<HomePage> {
       _budgetExpenseStart = includePrevious ? null : DateTime.now();
     });
     await _save();
+    if (mounted) {
+      _showSnack('Monthly budget updated.');
+    }
   }
 
   double get _spent => _expenses
@@ -401,6 +410,7 @@ class _HomePageState extends State<HomePage> {
   double get _owed => _debts
       .where((item) => !item.isOwedToMe && !item.settled)
       .fold(0, (sum, item) => sum + item.amount);
+  double get _availableBalance => _budget - _spent + _received - _owed;
   bool _matchesDate(DateTime date) {
     final now = DateTime.now();
     final normalized = DateTime(date.year, date.month, date.day);
@@ -483,6 +493,9 @@ class _HomePageState extends State<HomePage> {
     if (result == null) return;
     setState(() => _expenses = [result, ..._expenses]);
     await _save();
+    if (mounted) {
+      _showSnack('Expense added.');
+    }
   }
 
   Future<void> _addDebt() async {
@@ -495,6 +508,9 @@ class _HomePageState extends State<HomePage> {
     if (result == null) return;
     setState(() => _debts = [result, ..._debts]);
     await _save();
+    if (mounted) {
+      _showSnack('Balance added for ${result.name}.');
+    }
   }
 
   Future<void> _settleDebt(MoneyEntry item) async {
@@ -521,6 +537,75 @@ class _HomePageState extends State<HomePage> {
     }
     
     await _save();
+    if (mounted) {
+      _showSnack(
+        item.isOwedToMe
+            ? '${item.name} settled your balance.'
+            : 'Settlement added as an expense.',
+      );
+    }
+  }
+
+  Future<void> _deleteAllExpenses() async {
+    if (_expenses.isEmpty) {
+      _showSnack('There are no expenses to delete.');
+      return;
+    }
+    final confirmed = await _confirmDestructiveAction(
+      title: 'Delete all expenses?',
+      message: 'This will permanently remove ${_expenses.length} expense entries.',
+      confirmLabel: 'Delete expenses',
+    );
+    if (!confirmed || !mounted) return;
+    setState(() => _expenses = []);
+    await _save();
+    if (mounted) {
+      _showSnack('All expenses deleted.');
+    }
+  }
+
+  Future<void> _deleteAllPeople() async {
+    if (_debts.isEmpty) {
+      _showSnack('There are no people or balances to delete.');
+      return;
+    }
+    final confirmed = await _confirmDestructiveAction(
+      title: 'Delete all people?',
+      message: 'This will permanently remove all people and balances, including settled ones.',
+      confirmLabel: 'Delete people',
+    );
+    if (!confirmed || !mounted) return;
+    setState(() => _debts = []);
+    await _save();
+    if (mounted) {
+      _showSnack('All people and balances deleted.');
+    }
+  }
+
+  Future<bool> _confirmDestructiveAction({
+    required String title,
+    required String message,
+    required String confirmLabel,
+  }) async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(title),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: _pink),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: Text(confirmLabel),
+          ),
+        ],
+      ),
+    );
+    return result ?? false;
   }
 
   void _showNotifications() {
@@ -819,7 +904,7 @@ class _HomePageState extends State<HomePage> {
             const SizedBox(width: 12),
             _statCard(
               'Available',
-              'Rs. ${(_budget - _spent).toStringAsFixed(0)}',
+              'Rs. ${_availableBalance.toStringAsFixed(0)}',
               Icons.south_west_rounded,
               _green,
             ),
@@ -885,7 +970,7 @@ class _HomePageState extends State<HomePage> {
         ),
         const SizedBox(height: 8),
         Text(
-          'Rs. ${(_budget - _spent + _received - _owed).toStringAsFixed(2)}',
+          'Rs. ${_availableBalance.toStringAsFixed(2)}',
           style: const TextStyle(fontSize: 32, fontWeight: FontWeight.w800),
         ),
         const SizedBox(height: 18),
@@ -1455,6 +1540,21 @@ class _HomePageState extends State<HomePage> {
           onTap: _showExport,
         ),
         const SizedBox(height: 18),
+        _sectionTitle('Data management', 'Permanent actions'),
+        const SizedBox(height: 10),
+        _settingTile(
+          Icons.delete_sweep_outlined,
+          'Delete all expenses',
+          '${_expenses.length} saved expense${_expenses.length == 1 ? '' : 's'}',
+          onTap: _deleteAllExpenses,
+        ),
+        _settingTile(
+          Icons.group_remove_outlined,
+          'Delete all people',
+          '${_debts.length} saved balance${_debts.length == 1 ? '' : 's'}',
+          onTap: _deleteAllPeople,
+        ),
+        const SizedBox(height: 18),
         Center(
           child: Text(
             'Koin Flow 1.0.0 · Local only',
@@ -1496,35 +1596,25 @@ class _HomePageState extends State<HomePage> {
           ],
         ),
         const SizedBox(height: 14),
-        GestureDetector(
+        TextField(
+          controller: _budgetController,
+          focusNode: _budgetFocusNode,
+          keyboardType: const TextInputType.numberWithOptions(decimal: false),
+          textInputAction: TextInputAction.done,
           onTap: () {
             _budgetController.selection = TextSelection(
               baseOffset: 0,
               extentOffset: _budgetController.text.length,
             );
-            FocusScope.of(context).requestFocus(FocusNode());
-            Future.delayed(
-              const Duration(milliseconds: 100),
-              () => FocusScope.of(context).requestFocus(FocusNode()),
-            );
           },
-          child: TextField(
-            controller: _budgetController,
-            keyboardType: const TextInputType.numberWithOptions(decimal: false),
-            textInputAction: TextInputAction.done,
-            onSubmitted: _setBudgetFromText,
-            onChanged: (value) {
-              if (value.isEmpty) {
-                _budgetController.text = _budget.toStringAsFixed(0);
-              }
-            },
-            decoration: InputDecoration(
-              labelText: 'Type monthly limit',
-              prefixText: 'Rs. ',
-              suffixIcon: GestureDetector(
-                onTap: () => _setBudgetFromText(_budgetController.text),
-                child: const Icon(Icons.check_circle_outline, color: _violet),
-              ),
+          onSubmitted: _setBudgetFromText,
+          decoration: InputDecoration(
+            labelText: 'Type monthly limit',
+            prefixText: 'Rs. ',
+            suffixIcon: IconButton(
+              tooltip: 'Save budget',
+              onPressed: () => _setBudgetFromText(_budgetController.text),
+              icon: const Icon(Icons.check_circle_outline, color: _violet),
             ),
           ),
         ),
@@ -1587,6 +1677,7 @@ class _HomePageState extends State<HomePage> {
     onDismissed: (_) {
       setState(() => _expenses.remove(item));
       _save();
+      _showSnack('Expense deleted.');
     },
     background: Container(
       color: _pink.withValues(alpha: .15),
