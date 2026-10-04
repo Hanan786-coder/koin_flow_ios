@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -275,6 +276,8 @@ class _HomePageState extends State<HomePage> {
   bool _sortNewestFirst = true;
   String _chartRange = 'Weekly';
   bool _privacyLock = false;
+  OverlayEntry? _toastEntry;
+  Timer? _toastTimer;
 
   @override
   void initState() {
@@ -286,6 +289,8 @@ class _HomePageState extends State<HomePage> {
   void dispose() {
     _budgetController.dispose();
     _budgetFocusNode.dispose();
+    _toastTimer?.cancel();
+    _toastEntry?.remove();
     super.dispose();
   }
 
@@ -407,10 +412,13 @@ class _HomePageState extends State<HomePage> {
   double get _received => _debts
       .where((item) => item.isOwedToMe && !item.settled)
       .fold(0, (sum, item) => sum + item.amount);
+  double get _settledReceived => _debts
+      .where((item) => item.isOwedToMe && item.settled)
+      .fold(0, (sum, item) => sum + item.amount);
   double get _owed => _debts
       .where((item) => !item.isOwedToMe && !item.settled)
       .fold(0, (sum, item) => sum + item.amount);
-  double get _availableBalance => _budget - _spent + _received - _owed;
+  double get _availableBalance => _budget - _spent + _settledReceived - _owed;
   bool _matchesDate(DateTime date) {
     final now = DateTime.now();
     final normalized = DateTime(date.year, date.month, date.day);
@@ -1327,6 +1335,13 @@ class _HomePageState extends State<HomePage> {
               style: IconButton.styleFrom(backgroundColor: _panelHigh),
               icon: const Icon(Icons.tune_rounded, color: _violet),
             ),
+            const SizedBox(width: 4),
+            IconButton(
+              onPressed: _deleteAllExpenses,
+              tooltip: 'Delete all expenses',
+              style: IconButton.styleFrom(backgroundColor: _panelHigh),
+              icon: const Icon(Icons.delete_sweep_outlined, color: _pink),
+            ),
           ],
         ),
         const SizedBox(height: 8),
@@ -1409,6 +1424,13 @@ class _HomePageState extends State<HomePage> {
               tooltip: 'Filter and sort balances',
               style: IconButton.styleFrom(backgroundColor: _panelHigh),
               icon: const Icon(Icons.tune_rounded, color: _violet),
+            ),
+            const SizedBox(width: 4),
+            IconButton(
+              onPressed: _deleteAllPeople,
+              tooltip: 'Delete all people',
+              style: IconButton.styleFrom(backgroundColor: _panelHigh),
+              icon: const Icon(Icons.group_remove_outlined, color: _pink),
             ),
           ],
         ),
@@ -1538,21 +1560,6 @@ class _HomePageState extends State<HomePage> {
           'Export ledger',
           'Copy JSON backup',
           onTap: _showExport,
-        ),
-        const SizedBox(height: 18),
-        _sectionTitle('Data management', 'Permanent actions'),
-        const SizedBox(height: 10),
-        _settingTile(
-          Icons.delete_sweep_outlined,
-          'Delete all expenses',
-          '${_expenses.length} saved expense${_expenses.length == 1 ? '' : 's'}',
-          onTap: _deleteAllExpenses,
-        ),
-        _settingTile(
-          Icons.group_remove_outlined,
-          'Delete all people',
-          '${_debts.length} saved balance${_debts.length == 1 ? '' : 's'}',
-          onTap: _deleteAllPeople,
         ),
         const SizedBox(height: 18),
         Center(
@@ -1796,9 +1803,72 @@ class _HomePageState extends State<HomePage> {
       ],
     ),
   );
-  void _showSnack(String message) => ScaffoldMessenger.of(context).showSnackBar(
-    SnackBar(content: Text(message), behavior: SnackBarBehavior.floating),
-  );
+  void _showSnack(String message) {
+    _toastTimer?.cancel();
+    _toastEntry?.remove();
+    final overlay = Overlay.of(context, rootOverlay: true);
+    final entry = OverlayEntry(
+      builder: (context) => Positioned(
+        left: 20,
+        right: 20,
+        bottom: 28,
+        child: SafeArea(
+          child: Center(
+            child: Material(
+              color: Colors.transparent,
+              child: Container(
+                constraints: const BoxConstraints(minHeight: 48),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 12,
+                ),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF24343A),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: _violet.withValues(alpha: .32)),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: .28),
+                      blurRadius: 18,
+                      offset: const Offset(0, 8),
+                    ),
+                  ],
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(
+                      Icons.check_circle_rounded,
+                      color: _green,
+                      size: 20,
+                    ),
+                    const SizedBox(width: 10),
+                    Flexible(
+                      child: Text(
+                        message,
+                        style: const TextStyle(
+                          color: _ink,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    _toastEntry = entry;
+    overlay.insert(entry);
+    _toastTimer = Timer(const Duration(seconds: 3), () {
+      entry.remove();
+      if (identical(_toastEntry, entry)) {
+        _toastEntry = null;
+      }
+    });
+  }
 }
 
 class AddExpenseSheet extends StatefulWidget {
