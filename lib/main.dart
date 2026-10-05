@@ -1,10 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:ui' as ui;
 
-import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:cupertino_native/cupertino_native.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -813,48 +812,22 @@ class _HomePageState extends State<HomePage> {
       body: SafeArea(
         child: IndexedStack(index: _tab, children: pages),
       ),
-      bottomNavigationBar: ClipRRect(
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-        child: BackdropFilter(
-          filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-          child: Container(
-            decoration: BoxDecoration(
-              color: _bg.withValues(alpha: .78),
-              border: Border(
-                top: BorderSide(color: Colors.white.withValues(alpha: .12)),
-              ),
-            ),
-            child: CupertinoTabBar(
-              currentIndex: _tab,
-              onTap: (value) => setState(() => _tab = value),
-              backgroundColor: Colors.transparent,
-              activeColor: _violet,
-              inactiveColor: _muted,
-              border: Border(
-                top: BorderSide(color: Colors.white.withValues(alpha: .12)),
-              ),
-              iconSize: 24,
-              items: const [
-                BottomNavigationBarItem(
-                  icon: Icon(Icons.grid_view_rounded),
-                  label: 'Overview',
-                ),
-                BottomNavigationBarItem(
-                  icon: Icon(Icons.receipt_long_outlined),
-                  label: 'Expenses',
-                ),
-                BottomNavigationBarItem(
-                  icon: Icon(Icons.swap_horiz_rounded),
-                  label: 'People',
-                ),
-                BottomNavigationBarItem(
-                  icon: Icon(Icons.tune_rounded),
-                  label: 'Budget',
-                ),
-              ],
-            ),
+      bottomNavigationBar: CNTabBar(
+        currentIndex: _tab,
+        onTap: (value) => setState(() => _tab = value),
+        tint: _violet,
+        items: const [
+          CNTabBarItem(
+            label: 'Overview',
+            icon: CNSymbol('square.grid.2x2.fill'),
           ),
-        ),
+          CNTabBarItem(label: 'Expenses', icon: CNSymbol('receipt.fill')),
+          CNTabBarItem(
+            label: 'People',
+            icon: CNSymbol('arrow.left.arrow.right'),
+          ),
+          CNTabBarItem(label: 'Budget', icon: CNSymbol('slider.horizontal.3')),
+        ],
       ),
     );
   }
