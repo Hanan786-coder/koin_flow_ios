@@ -420,8 +420,8 @@ class _HomePageState extends State<HomePage> {
   double get _owed => _debts
       .where((item) => !item.isOwedToMe && !item.settled)
       .fold(0, (sum, item) => sum + item.amount);
-  double get _availableBalance => _budget - _spent + _settledReceived - _owed;
-  double get _netLiquidity => _availableBalance + _received;
+  double get _availableBalance => _budget - _spent + _settledReceived;
+  double get _netLiquidity => _availableBalance + _received - _owed;
   bool _matchesDate(DateTime date) {
     final now = DateTime.now();
     final normalized = DateTime(date.year, date.month, date.day);
