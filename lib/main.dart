@@ -86,7 +86,9 @@ class MoneyEntry {
     amount: (json['amount'] as num).toDouble(),
     note: json['note'] as String,
     isOwedToMe: json['isOwedToMe'] as bool,
-    dueDate: json['dueDate'] != null ? DateTime.parse(json['dueDate'] as String) : null,
+    dueDate: json['dueDate'] != null
+        ? DateTime.parse(json['dueDate'] as String)
+        : null,
     settled: json['settled'] as bool? ?? false,
   );
 }
@@ -179,13 +181,12 @@ class _SplashScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scaleAnimation =
-        Tween<double>(begin: 0.8, end: 1.2).animate(
-          CurvedAnimation(
-            parent: controller,
-            curve: const Interval(0, 0.6, curve: Curves.easeOutCubic),
-          ),
-        );
+    final scaleAnimation = Tween<double>(begin: 0.8, end: 1.2).animate(
+      CurvedAnimation(
+        parent: controller,
+        curve: const Interval(0, 0.6, curve: Curves.easeOutCubic),
+      ),
+    );
     final opacityAnimation = Tween<double>(begin: 1, end: 0).animate(
       CurvedAnimation(
         parent: controller,
@@ -211,11 +212,12 @@ class _SplashScreen extends StatelessWidget {
                   ),
                   const SizedBox(height: 20),
                   ScaleTransition(
-                    scale: Tween<double>(begin: 0.9, end: 1)
-                        .animate(CurvedAnimation(
-                          parent: controller,
-                          curve: Curves.easeOut,
-                        )),
+                    scale: Tween<double>(begin: 0.9, end: 1).animate(
+                      CurvedAnimation(
+                        parent: controller,
+                        curve: Curves.easeOut,
+                      ),
+                    ),
                     child: const Text(
                       'Koin Flow',
                       style: TextStyle(
@@ -228,11 +230,9 @@ class _SplashScreen extends StatelessWidget {
                   ),
                   const SizedBox(height: 8),
                   FadeTransition(
-                    opacity: Tween<double>(begin: 0.6, end: 0)
-                        .animate(CurvedAnimation(
-                          parent: controller,
-                          curve: Curves.easeIn,
-                        )),
+                    opacity: Tween<double>(begin: 0.6, end: 0).animate(
+                      CurvedAnimation(parent: controller, curve: Curves.easeIn),
+                    ),
                     child: const Text(
                       'Track your flow',
                       style: TextStyle(
@@ -272,10 +272,12 @@ class _HomePageState extends State<HomePage> {
   String _expenseCategory = 'All';
   String _dateFilter = 'All time';
   DateTime? _specificDate;
+  DateTime? _filterWeekStart;
   int? _filterMonth;
   int? _filterYear;
   bool _sortNewestFirst = true;
   String _chartRange = 'Weekly';
+  DateTime _chartAnchor = DateTime.now();
   bool _privacyLock = false;
   OverlayEntry? _toastEntry;
   Timer? _toastTimer;
@@ -419,7 +421,8 @@ class _HomePageState extends State<HomePage> {
   double get _owed => _debts
       .where((item) => !item.isOwedToMe && !item.settled)
       .fold(0, (sum, item) => sum + item.amount);
-  double get _availableBalance => _budget - _spent + _settledReceived;
+  double get _availableBalance =>
+      _budget - _spent - _received;
   double get _netLiquidity => _availableBalance + _received - _owed;
   bool _matchesDate(DateTime date) {
     final now = DateTime.now();
@@ -431,7 +434,15 @@ class _HomePageState extends State<HomePage> {
         !normalized.isBefore(
               today.subtract(Duration(days: today.weekday - 1)),
             ) &&
-            !normalized.isAfter(today),
+            normalized.isBefore(
+              today
+                  .subtract(Duration(days: today.weekday - 1))
+                  .add(const Duration(days: 7)),
+            ),
+      'Specific week' =>
+        _filterWeekStart != null &&
+            !normalized.isBefore(_filterWeekStart!) &&
+            normalized.isBefore(_filterWeekStart!.add(const Duration(days: 7))),
       'This month' =>
         normalized.year == today.year && normalized.month == today.month,
       'Specific month' =>
@@ -450,6 +461,15 @@ class _HomePageState extends State<HomePage> {
       _ => true,
     };
   }
+
+  String get _dateFilterLabel => switch (_dateFilter) {
+    'Specific week' when _filterWeekStart != null =>
+      'Week of ${_date(_filterWeekStart!)}',
+    'Specific month' when _filterMonth != null && _filterYear != null =>
+      '${_monthName(_filterMonth!)} $_filterYear',
+    'Specific date' when _specificDate != null => _date(_specificDate!),
+    _ => _dateFilter,
+  };
 
   List<Expense> get _filteredExpenses {
     final result = _expenses
@@ -479,17 +499,17 @@ class _HomePageState extends State<HomePage> {
               item.name.toLowerCase().contains(_debtQuery.toLowerCase()) ||
               item.note.toLowerCase().contains(_debtQuery.toLowerCase()),
         )
-        .where((item) => item.dueDate == null || _matchesDate(item.dueDate!))
+        .where(
+          (item) =>
+              _dateFilter == 'All time' ||
+              (item.dueDate != null && _matchesDate(item.dueDate!)),
+        )
         .toList();
-    result.sort(
-      (a, b) {
-        final aDate = a.dueDate ?? DateTime(2099);
-        final bDate = b.dueDate ?? DateTime(2099);
-        return _sortNewestFirst
-            ? bDate.compareTo(aDate)
-            : aDate.compareTo(bDate);
-      },
-    );
+    result.sort((a, b) {
+      final aDate = a.dueDate ?? DateTime(2099);
+      final bDate = b.dueDate ?? DateTime(2099);
+      return _sortNewestFirst ? bDate.compareTo(aDate) : aDate.compareTo(bDate);
+    });
     return result;
   }
 
@@ -532,20 +552,22 @@ class _HomePageState extends State<HomePage> {
           )
           .toList(),
     );
-    
+
     // If I gave them money (I owe them), create an expense entry
     if (!item.isOwedToMe) {
-      setState(() => _expenses = [
-        Expense(
-          title: '${item.name} - Settled',
-          amount: item.amount,
-          category: 'Other',
-          date: DateTime.now(),
-        ),
-        ..._expenses,
-      ]);
+      setState(
+        () => _expenses = [
+          Expense(
+            title: '${item.name} - Settled',
+            amount: item.amount,
+            category: 'Other',
+            date: DateTime.now(),
+          ),
+          ..._expenses,
+        ],
+      );
     }
-    
+
     await _save();
     if (mounted) {
       _showSnack(
@@ -563,7 +585,8 @@ class _HomePageState extends State<HomePage> {
     }
     final confirmed = await _confirmDestructiveAction(
       title: 'Delete all expenses?',
-      message: 'This will permanently remove ${_expenses.length} expense entries.',
+      message:
+          'This will permanently remove ${_expenses.length} expense entries.',
       confirmLabel: 'Delete expenses',
     );
     if (!confirmed || !mounted) return;
@@ -675,6 +698,80 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  Future<void> _showImportLedger() async {
+    final controller = TextEditingController();
+    final backup = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Add ledger backup'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          minLines: 8,
+          maxLines: 16,
+          keyboardType: TextInputType.multiline,
+          decoration: const InputDecoration(
+            hintText: 'Paste the JSON copied from Export ledger',
+            alignLabelWithHint: true,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, controller.text),
+            child: const Text('Restore'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (backup == null || backup.trim().isEmpty || !mounted) return;
+
+    try {
+      final decoded = jsonDecode(backup);
+      if (decoded is! Map<String, dynamic>) {
+        throw const FormatException('Backup must be a JSON object.');
+      }
+      final expensesJson = decoded['expenses'];
+      final balancesJson = decoded['balances'];
+      if (expensesJson is! List || balancesJson is! List) {
+        throw const FormatException(
+          'Backup must contain expenses and balances lists.',
+        );
+      }
+      final expenses = expensesJson
+          .map(
+            (item) => Expense.fromJson(Map<String, dynamic>.from(item as Map)),
+          )
+          .toList();
+      final debts = balancesJson
+          .map(
+            (item) =>
+                MoneyEntry.fromJson(Map<String, dynamic>.from(item as Map)),
+          )
+          .toList();
+      final budget = decoded['monthlyBudget'];
+      setState(() {
+        _expenses = expenses;
+        _debts = debts;
+        if (budget is num && budget > 0) {
+          _budget = budget.toDouble();
+          _budgetSliderValue = _budget;
+          _budgetController.text = _budget.toStringAsFixed(0);
+        }
+      });
+      await _save();
+      if (mounted) _showSnack('Ledger restored successfully.');
+    } on FormatException catch (error) {
+      _showSnack('Could not restore ledger: ${error.message}');
+    } on TypeError {
+      _showSnack('Could not restore ledger: one or more entries are invalid.');
+    }
+  }
+
   Future<void> _showFilters() async {
     await showModalBottomSheet<void>(
       context: context,
@@ -716,6 +813,7 @@ class _HomePageState extends State<HomePage> {
                           'All time',
                           'Today',
                           'This week',
+                          'Specific week',
                           'This month',
                           'Specific month',
                           'Specific date',
@@ -728,7 +826,31 @@ class _HomePageState extends State<HomePage> {
                         )
                         .toList(),
                 onChanged: (value) async {
-                  if (value == 'Specific month') {
+                  if (value == 'Specific week') {
+                    final picked = await showDatePicker(
+                      context: sheetContext,
+                      initialDate: _filterWeekStart ?? DateTime.now(),
+                      firstDate: DateTime(2020),
+                      lastDate: DateTime(2100),
+                    );
+                    if (picked != null) {
+                      final normalized = DateTime(
+                        picked.year,
+                        picked.month,
+                        picked.day,
+                      );
+                      setState(() {
+                        _filterWeekStart = normalized.subtract(
+                          Duration(days: normalized.weekday - 1),
+                        );
+                        _dateFilter = value!;
+                        _specificDate = null;
+                        _filterMonth = null;
+                        _filterYear = null;
+                      });
+                      setSheetState(() {});
+                    }
+                  } else if (value == 'Specific month') {
                     final now = DateTime.now();
                     final picked = await showDatePicker(
                       context: sheetContext,
@@ -744,6 +866,7 @@ class _HomePageState extends State<HomePage> {
                         _filterMonth = picked.month;
                         _filterYear = picked.year;
                         _dateFilter = value!;
+                        _filterWeekStart = null;
                       });
                     }
                   } else if (value == 'Specific date') {
@@ -758,6 +881,7 @@ class _HomePageState extends State<HomePage> {
                       setState(() {
                         _specificDate = picked;
                         _dateFilter = value!;
+                        _filterWeekStart = null;
                       });
                     }
                   } else {
@@ -765,6 +889,7 @@ class _HomePageState extends State<HomePage> {
                     setState(() {
                       _dateFilter = value!;
                       _specificDate = null;
+                      _filterWeekStart = null;
                       _filterMonth = null;
                       _filterYear = null;
                     });
@@ -998,15 +1123,9 @@ class _HomePageState extends State<HomePage> {
     ),
   );
   Widget _cashflowChart() {
-    final today = DateTime.now();
-    final values = _chartValues(today);
-    final labels = _chartLabels(today);
+    final values = _chartValues(_chartAnchor);
+    final labels = _chartLabels(_chartAnchor);
     final total = values.fold(0.0, (sum, value) => sum + value);
-    final detail = switch (_chartRange) {
-      'Monthly' => 'Weekly totals · last 5 weeks',
-      'Yearly' => 'Monthly totals · this year',
-      _ => 'Daily totals · last 7 days',
-    };
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
       decoration: BoxDecoration(
@@ -1032,7 +1151,7 @@ class _HomePageState extends State<HomePage> {
                     ),
                     const SizedBox(height: 3),
                     Text(
-                      detail,
+                      _chartDetail,
                       style: const TextStyle(color: _muted, fontSize: 12),
                     ),
                   ],
@@ -1058,6 +1177,14 @@ class _HomePageState extends State<HomePage> {
                 ),
               ),
             ],
+          ),
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton.icon(
+              onPressed: _pickChartPeriod,
+              icon: const Icon(Icons.event_outlined, size: 16),
+              label: Text(_chartPeriodLabel),
+            ),
           ),
           const SizedBox(height: 14),
           SizedBox(
@@ -1103,24 +1230,35 @@ class _HomePageState extends State<HomePage> {
       );
     }
     if (_chartRange == 'Monthly') {
+      final monthStart = DateTime(today.year, today.month);
+      final monthEnd = DateTime(
+        today.year,
+        today.month + 1,
+      ).subtract(const Duration(days: 1));
       return List.generate(5, (index) {
-        final end = DateTime(
-          today.year,
-          today.month,
-          today.day - ((4 - index) * 7),
-        );
-        final start = end.subtract(const Duration(days: 6));
+        final start = monthStart.add(Duration(days: index * 7));
+        final end =
+            DateTime(start.year, start.month, start.day + 6).isAfter(monthEnd)
+            ? monthEnd
+            : DateTime(start.year, start.month, start.day + 6);
         return _expenses
             .where(
               (item) =>
                   !item.date.isBefore(start) &&
-                  !item.date.isAfter(end.add(const Duration(days: 1))),
+                  !item.date.isAfter(
+                    DateTime(end.year, end.month, end.day, 23, 59, 59),
+                  ),
             )
             .fold(0, (sum, item) => sum + item.amount);
       });
     }
+    final weekStart = DateTime(
+      today.year,
+      today.month,
+      today.day,
+    ).subtract(Duration(days: today.weekday - 1));
     return List.generate(7, (index) {
-      final day = DateTime(today.year, today.month, today.day - (6 - index));
+      final day = weekStart.add(Duration(days: index));
       return _expenses
           .where(
             (item) =>
@@ -1154,8 +1292,40 @@ class _HomePageState extends State<HomePage> {
     }
     return List.generate(
       7,
-      (index) => _weekday(today.subtract(Duration(days: 6 - index))),
+      (index) => _weekday(
+        DateTime(
+          today.year,
+          today.month,
+          today.day,
+        ).subtract(Duration(days: today.weekday - 1 - index)),
+      ),
     );
+  }
+
+  String get _chartPeriodLabel => switch (_chartRange) {
+    'Yearly' => '${_chartAnchor.year}',
+    'Monthly' => '${_monthName(_chartAnchor.month)} ${_chartAnchor.year}',
+    _ =>
+      'Week of ${_date(_chartAnchor.subtract(Duration(days: _chartAnchor.weekday - 1)))}',
+  };
+
+  String get _chartDetail => switch (_chartRange) {
+    'Monthly' => 'Weekly totals · $_chartPeriodLabel',
+    'Yearly' => 'Monthly totals · $_chartPeriodLabel',
+    _ => 'Daily totals · $_chartPeriodLabel',
+  };
+
+  Future<void> _pickChartPeriod() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _chartAnchor,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2100),
+      helpText: 'Select chart period',
+    );
+    if (picked != null) {
+      setState(() => _chartAnchor = picked);
+    }
   }
 
   Widget _categoryBreakdown() {
@@ -1337,7 +1507,7 @@ class _HomePageState extends State<HomePage> {
         ),
         const SizedBox(height: 8),
         Text(
-          '${_dateFilter == 'Specific month' && _filterMonth != null ? 'Month: ${_monthName(_filterMonth!)} ${_filterYear!}' : _dateFilter == 'Specific date' && _specificDate != null ? _date(_specificDate!) : _dateFilter} · ${_sortNewestFirst ? 'Newest first' : 'Oldest first'}',
+          '$_dateFilterLabel · ${_sortNewestFirst ? 'Newest first' : 'Oldest first'}',
           style: const TextStyle(color: _muted, fontSize: 12),
         ),
         const SizedBox(height: 12),
@@ -1425,6 +1595,11 @@ class _HomePageState extends State<HomePage> {
             ),
           ],
         ),
+        const SizedBox(height: 8),
+        Text(
+          '$_dateFilterLabel · ${_sortNewestFirst ? 'Newest first' : 'Oldest first'}',
+          style: const TextStyle(color: _muted, fontSize: 12),
+        ),
         const SizedBox(height: 18),
         _sectionTitle('Open balances', 'Add balance', onTap: _addDebt),
         const SizedBox(height: 12),
@@ -1447,78 +1622,100 @@ class _HomePageState extends State<HomePage> {
       ],
     ),
   );
-  Widget _debtTile(MoneyEntry item) => Container(
-    margin: const EdgeInsets.only(bottom: 10),
-    padding: const EdgeInsets.all(15),
-    decoration: BoxDecoration(
-      color: item.settled ? _panelHigh : _panel,
-      borderRadius: BorderRadius.circular(15),
-      border: Border.all(
-        color: item.settled
-            ? Colors.white.withValues(alpha: .03)
-            : Colors.white.withValues(alpha: .06),
+  Widget _debtTile(MoneyEntry item) => Dismissible(
+    key: ValueKey(item.id),
+    direction: DismissDirection.endToStart,
+    onDismissed: (_) {
+      setState(() => _debts.removeWhere((entry) => entry.id == item.id));
+      _save();
+      _showSnack('${item.name} deleted.');
+    },
+    background: Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: BoxDecoration(
+        color: _pink.withValues(alpha: .15),
+        borderRadius: BorderRadius.circular(15),
       ),
+      alignment: Alignment.centerRight,
+      padding: const EdgeInsets.only(right: 20),
+      child: const Icon(Icons.delete_outline, color: _pink),
     ),
-    child: Row(
-      children: [
-        CircleAvatar(
-          backgroundColor: (item.isOwedToMe ? _green : _pink).withValues(
-            alpha: item.settled ? .08 : .16,
-          ),
-          child: Text(
-            item.name.substring(0, 1).toUpperCase(),
-            style: TextStyle(
-              color: (item.isOwedToMe ? _green : _pink)
-                  .withValues(alpha: item.settled ? 0.6 : 1.0),
-              fontWeight: FontWeight.w700,
+    child: Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(15),
+      decoration: BoxDecoration(
+        color: item.settled ? _panelHigh : _panel,
+        borderRadius: BorderRadius.circular(15),
+        border: Border.all(
+          color: item.settled
+              ? Colors.white.withValues(alpha: .03)
+              : Colors.white.withValues(alpha: .06),
+        ),
+      ),
+      child: Row(
+        children: [
+          CircleAvatar(
+            backgroundColor: (item.isOwedToMe ? _green : _pink).withValues(
+              alpha: item.settled ? .08 : .16,
+            ),
+            child: Text(
+              item.name.substring(0, 1).toUpperCase(),
+              style: TextStyle(
+                color: (item.isOwedToMe ? _green : _pink).withValues(
+                  alpha: item.settled ? 0.6 : 1.0,
+                ),
+                fontWeight: FontWeight.w700,
+              ),
             ),
           ),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  item.name,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    decoration: item.settled
+                        ? TextDecoration.lineThrough
+                        : null,
+                    color: item.settled ? _muted : _ink,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  '${item.note}${item.dueDate != null ? ' · Due ${_date(item.dueDate!)}' : ''}',
+                  style: TextStyle(
+                    color: item.settled ? _muted.withValues(alpha: .6) : _muted,
+                    fontSize: 13,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               Text(
-                item.name,
+                '${item.isOwedToMe ? '+' : '-'}Rs. ${item.amount.toStringAsFixed(2)}',
                 style: TextStyle(
+                  color: item.isOwedToMe ? _green : _pink,
                   fontWeight: FontWeight.w700,
                   decoration: item.settled ? TextDecoration.lineThrough : null,
-                  color: item.settled ? _muted : _ink,
                 ),
               ),
-              const SizedBox(height: 3),
-              Text(
-                '${item.note}${item.dueDate != null ? ' · Due ${_date(item.dueDate!)}' : ''}',
-                style: TextStyle(
-                  color: item.settled ? _muted.withValues(alpha: .6) : _muted,
-                  fontSize: 13,
-                ),
-              ),
+              if (!item.settled)
+                TextButton(
+                  onPressed: () => _settleDebt(item),
+                  child: const Text('Settle'),
+                )
+              else
+                const SizedBox(height: 32),
             ],
           ),
-        ),
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            Text(
-              '${item.isOwedToMe ? '+' : '-'}Rs. ${item.amount.toStringAsFixed(2)}',
-              style: TextStyle(
-                color: item.isOwedToMe ? _green : _pink,
-                fontWeight: FontWeight.w700,
-                decoration: item.settled ? TextDecoration.lineThrough : null,
-              ),
-            ),
-            if (!item.settled)
-              TextButton(
-                onPressed: () => _settleDebt(item),
-                child: const Text('Settle'),
-              )
-            else
-              const SizedBox(height: 32),
-          ],
-        ),
-      ],
+        ],
+      ),
     ),
   );
   Widget _settingsPage() => _shell(
@@ -1551,6 +1748,12 @@ class _HomePageState extends State<HomePage> {
           'Export ledger',
           'Copy JSON backup',
           onTap: _showExport,
+        ),
+        _settingTile(
+          Icons.file_upload_outlined,
+          'Add ledger',
+          'Paste a JSON backup to restore data',
+          onTap: _showImportLedger,
         ),
         const SizedBox(height: 18),
         Center(
@@ -2089,8 +2292,12 @@ class _AddMoneySheetState extends State<AddMoneySheet> {
             width: double.infinity,
             child: FilledButton(
               onPressed: () {
-                final amount = double.tryParse(_amount.text.replaceAll(',', ''));
-                if (_name.text.trim().isEmpty || amount == null || amount <= 0) {
+                final amount = double.tryParse(
+                  _amount.text.replaceAll(',', ''),
+                );
+                if (_name.text.trim().isEmpty ||
+                    amount == null ||
+                    amount <= 0) {
                   return;
                 }
                 Navigator.pop(
@@ -2204,8 +2411,18 @@ IconData _categoryIcon(String category) => switch (category) {
 };
 String _date(DateTime date) => '${date.month}/${date.day}';
 String _monthName(int month) => const [
-  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
 ][month - 1];
 String _weekday(DateTime date) =>
     const ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][date.weekday - 1];
